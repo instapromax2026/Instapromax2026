@@ -1,96 +1,235 @@
-from flask import Flask, render_template_string, request
+from flask import Flask, request, render_template_string, send_file
+import yt_dlp
+import tempfile
+import os
+import glob
+import shutil
+from urllib.parse import urlparse
 
 app = Flask(__name__)
+
+app.config["MAX_CONTENT_LENGTH"] = 200 * 1024
 
 HTML = """
 <!DOCTYPE html>
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>InstaProMax</title>
+<title>InstaProMax Downloader</title>
+
 <style>
+* {
+    box-sizing: border-box;
+}
 body {
     margin: 0;
     font-family: Arial;
-    background: #101426;
+    background: #07152e;
     color: white;
     text-align: center;
 }
 header {
     padding: 25px;
-    background: #202b50;
     font-size: 30px;
     font-weight: bold;
+    color: #00c8ff;
 }
-h2 { margin-top: 35px; }
-.box {
-    background: #202b50;
-    margin: 20px;
+.container {
+    max-width: 500px;
+    margin: 40px auto;
     padding: 25px;
-    border-radius: 18px;
+}
+h1 {
+    font-size: 28px;
+}
+p {
+    color: #b8c8e5;
 }
 input {
-    width: 90%;
-    padding: 14px;
-    border: 0;
+    width: 100%;
+    padding: 17px;
     border-radius: 10px;
-    box-sizing: border-box;
+    border: none;
+    margin-top: 20px;
+    font-size: 15px;
 }
 button {
-    background: #2878ff;
+    width: 100%;
+    padding: 16px;
+    background: #008cff;
     color: white;
-    border: 0;
-    padding: 13px 25px;
+    border: none;
     border-radius: 10px;
     margin-top: 15px;
-    font-size: 16px;
+    font-size: 18px;
+    font-weight: bold;
 }
-footer { padding: 25px; color: #aaa; }
+button:active {
+    background: #005bbb;
+}
+.box {
+    background: #10264a;
+    padding: 20px;
+    border-radius: 15px;
+    margin-top: 25px;
+}
+.error {
+    color: #ff7777;
+    margin-top: 20px;
+}
+footer {
+    margin-top: 70px;
+    color: #8295b5;
+    font-size: 13px;
+}
 </style>
 </head>
+
 <body>
-<header>🚀 InstaProMax</header>
-<h2>All Video Tools in One Place</h2>
+
+<header>InstaProMax</header>
+
+<div class="container">
+
+<h1>Video Downloader</h1>
+
+<p>YouTube, Instagram और Facebook के समर्थित वीडियो लिंक यहाँ डालें।</p>
 
 <div class="box">
-<h2>🔴 YouTube Downloader</h2>
-<form action="/download" method="post">
-<input type="url" name="url" placeholder="Paste YouTube link" required>
-<input type="hidden" name="platform" value="YouTube">
-<button>Download</button>
+
+<form action="/download" method="POST">
+
+<input
+type="url"
+name="url"
+placeholder="Paste Video Link Here..."
+required>
+
+<button type="submit">
+Download Video
+</button>
+
 </form>
+
+{% if error %}
+<div class="error">{{ error }}</div>
+{% endif %}
+
 </div>
 
-<div class="box">
-<h2>📸 Instagram Downloader</h2>
-<form action="/download" method="post">
-<input type="url" name="url" placeholder="Paste Instagram link" required>
-<input type="hidden" name="platform" value="Instagram">
-<button>Download</button>
-</form>
-</div>
+<footer>
+InstaProMax © 2026
+<br><br>
+Only download content you own or are authorized to download.
+</footer>
 
-<div class="box">
-<h2>🔵 Facebook Downloader</h2>
-<form action="/download" method="post">
-<input type="url" name="url" placeholder="Paste Facebook link" required>
-<input type="hidden" name="platform" value="Facebook">
-<button>Download</button>
-</form>
 </div>
-
-<footer>© 2026 InstaProMax</footer>
 </body>
 </html>
 """
+
+
+ALLOWED_DOMAINS = [
+    "youtube.com",
+    "youtu.be",
+    "instagram.com",
+    "facebook.com",
+    "fb.watch"
+]
+
+
+def valid_url(url):
+    try:
+        parsed = urlparse(url)
+
+        if parsed.scheme != "https":
+            return False
+
+        if not parsed.hostname:
+            return False
+
+        if parsed.username or parsed.password:
+            return False
+
+        if parsed.port not in (None, 443):
+            return False
+
+        host = parsed.hostname.lower()
+
+        return any(
+            host == domain or host.endswith("." + domain)
+            for domain in ALLOWED_DOMAINS
+        )
+
+    except ValueError:
+        return False
+
 
 @app.route("/")
 def home():
     return render_template_string(HTML)
 
+
 @app.route("/download", methods=["POST"])
 def download():
-    return "Downloader setup is coming soon!"
+
+    url = request.form.get("url", "").strip()
+
+    if not valid_url(url):
+        return render_template_string(
+            HTML,
+            error="कृपया सही समर्थित HTTPS वीडियो लिंक डालें।"
+        )
+
+    folder = tempfile.mkdtemp(prefix="instapromax_")
+
+    try:
+
+        options = {
+            "format": "best[ext=mp4]/best",
+            "outtmpl": os.path.join(
+                folder, "%(title).80s.%(ext)s"
+            ),
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+            "max_filesize": 100 * 1024 * 1024,
+            "socket_timeout": 20,
+            "retries": 1
+        }
+
+        with yt_dlp.YoutubeDL(options) as ydl:
+            ydl.download([url])
+
+        files = glob.glob(os.path.join(folder, "*"))
+
+        if not files:
+            raise Exception("Video file नहीं मिली।")
+
+        filepath = files[0]
+
+        response = send_file(
+            filepath,
+            as_attachment=True,
+            download_name=os.path.basename(filepath)
+        )
+
+        response.call_on_close(
+            lambda: shutil.rmtree(folder, ignore_errors=True)
+        )
+
+        return response
+
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+
+        return render_template_string(
+            HTML,
+            error="डाउनलोड नहीं हो पाया। यह लिंक समर्थित नहीं है या वीडियो उपलब्ध नहीं है।"
+        )
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
+
+
